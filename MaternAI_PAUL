@@ -1,0 +1,185 @@
+# ================================
+#  IMPORTING REQUIRED LIBRARIES
+# ================================
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import SelectKBest, chi2
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import (
+    accuracy_score, 
+    precision_score, 
+    recall_score, 
+    f1_score, 
+    classification_report, 
+    confusion_matrix
+)
+import pickle
+import os
+
+# ================================
+#  STEP 1: LOAD AND EXPLORE DATA
+# ================================
+# Update this with the actual path to your dataset
+FILE_PATH = "pregnancy_risk_data.csv"
+assert os.path.exists(FILE_PATH), f"Dataset not found at {FILE_PATH}"
+
+# Load the dataset
+data = pd.read_csv(FILE_PATH)
+
+# Display basic information about the dataset
+print("\n--- Dataset Overview ---")
+print(data.head(), "\n")
+print(data.info(), "\n")
+print(data.describe(include='all'), "\n")
+
+# Checking for missing values
+missing_values = data.isnull().sum()
+print("--- Missing Values ---")
+print(missing_values[missing_values > 0], "\n")
+
+# ================================
+#  STEP 2: DATA VISUALIZATION
+# ================================
+# Visualizing target distribution (Assuming 'Risk' is the target variable)
+target_col = 'Risk'
+sns.countplot(data[target_col])
+plt.title('Target Variable Distribution')
+plt.show()
+
+# Pairplot for initial data visualization (use cautiously on large datasets)
+sns.pairplot(data, hue=target_col, diag_kind="kde")
+plt.show()
+
+# ================================
+#  STEP 3: DATA PREPROCESSING
+# ================================
+# Imputation for missing values
+imputer = SimpleImputer(strategy="mean")
+data.iloc[:, :-1] = imputer.fit_transform(data.iloc[:, :-1])  # Assuming target is the last column
+
+# Encode target variable (if categorical)
+if data[target_col].dtype == 'object':
+    label_encoder = LabelEncoder()
+    data[target_col] = label_encoder.fit_transform(data[target_col])
+
+# Split features (X) and target (y)
+X = data.drop(columns=[target_col])
+y = data[target_col]
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# Standardize the features
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# ================================
+#  STEP 4: FEATURE ENGINEERING
+# ================================
+# Feature selection using chi-squared test
+num_features_to_select = 5
+feature_selector = SelectKBest(score_func=chi2, k=num_features_to_select)
+X_train_selected = feature_selector.fit_transform(X_train, y_train)
+X_test_selected = feature_selector.transform(X_test)
+
+selected_feature_indices = feature_selector.get_support(indices=True)
+selected_features = X.columns[selected_feature_indices]
+
+print("\n--- Selected Features ---")
+print(selected_features)
+
+# ================================
+#  STEP 5: MODEL TRAINING
+# ================================
+# Define a list of models to train
+models = {
+    "Logistic Regression": LogisticRegression(),
+    "Support Vector Machine": SVC(),
+    "Random Forest": RandomForestClassifier(),
+    "Gradient Boosting": GradientBoostingClassifier()
+}
+
+# Train each model and evaluate
+results = {}
+for name, model in models.items():
+    print(f"\n--- Training {name} ---")
+    model.fit(X_train_selected, y_train)
+    y_pred = model.predict(X_test_selected)
+    
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average="weighted")
+    recall = recall_score(y_test, y_pred, average="weighted")
+    f1 = f1_score(y_test, y_pred, average="weighted")
+    
+    results[name] = {
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall": recall,
+        "F1-Score": f1
+    }
+    
+    # Display classification report
+    print(f"\nClassification Report for {name}:\n")
+    print(classification_report(y_test, y_pred))
+    
+    # Display confusion matrix
+    sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', cmap='Blues')
+    plt.title(f"Confusion Matrix for {name}")
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.show()
+
+# Print model comparison
+print("\n--- Model Comparison ---")
+results_df = pd.DataFrame(results).T
+print(results_df)
+
+# ================================
+#  STEP 6: HYPERPARAMETER TUNING
+# ================================
+print("\n--- Hyperparameter Tuning for Random Forest ---")
+param_grid_rf = {
+    "n_estimators": [50, 100, 200],
+    "max_depth": [None, 10, 20],
+    "min_samples_split": [2, 5, 10]
+}
+rf_grid_search = GridSearchCV(
+    RandomForestClassifier(random_state=42), 
+    param_grid_rf, 
+    cv=5, 
+    scoring="accuracy", 
+    n_jobs=-1
+)
+rf_grid_search.fit(X_train_selected, y_train)
+best_rf = rf_grid_search.best_estimator_
+
+# Evaluate tuned Random Forest
+y_pred_rf_tuned = best_rf.predict(X_test_selected)
+print("\nTuned Random Forest Classification Report:")
+print(classification_report(y_test, y_pred_rf_tuned))
+
+# ================================
+#  STEP 7: MODEL SAVING & DEPLOYMENT
+# ================================
+# Save the best model
+model_save_path = "best_model_rf.pkl"
+with open(model_save_path, "wb") as f:
+    pickle.dump(best_rf, f)
+print(f"\nModel saved to {model_save_path}.")
+
+# Load and test saved model
+with open(model_save_path, "rb") as f:
+    loaded_model = pickle.load(f)
+
+sample_prediction = loaded_model.predict(X_test_selected[:5])
+print(f"\nSample Predictions from Loaded Model: {sample_prediction}")
